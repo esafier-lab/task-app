@@ -1,4 +1,4 @@
-// Setup type definitions for built-in Supabase Runtime APIs
+// Setup Supabase Edge Runtime types
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import OpenAI from "npm:openai";
@@ -10,12 +10,12 @@ const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
 
-Deno.serve(async (req) => {
+async function createTaskWithAI(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -23,27 +23,39 @@ Deno.serve(async (req) => {
   try {
     const { title, description } = await req.json();
 
-    console.log("🔄 Creating task with AI suggestions...");
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      throw new Error("No authorization header");
-    }
+    if (!title) throw new Error("Missing title");
 
-    // Initialize Supabase client
-    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: { Authorization: authHeader },
-      },
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) throw new Error("Missing Authorization header");
+
+    // Initialize Supabase client with user JWT
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
     });
 
-    // Get user session
+    // Get authenticated user
     const {
       data: { user },
-    } = await supabaseClient.auth.getUser();
-    if (!user) throw new Error("No user found");
+    } = await supabase.auth.getUser();
 
-    // Create the task
-    const { data, error } = await supabaseClient
+    if (!user) throw new Error("User not authenticated");
+
+    // Optional subscription check
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("subscription_level")
+      .eq("id", user.id)
+      .single();
+
+    if (profile?.subscription_level !== "premium") {
+      return new Response(
+        JSON.stringify({ error: "AI labeling requires a premium account" }),
+        { status: 403, headers: corsHeaders }
+      );
+    }
+
+    // Insert base task
+    const { data: task, error: taskInsertError } = await supabase
       .from("tasks")
       .insert({
         title,
@@ -54,54 +66,58 @@ Deno.serve(async (req) => {
       .select()
       .single();
 
-    if (error) throw error;
+    if (taskInsertError) throw taskInsertError;
 
     // Initialize OpenAI
-    const openai = new OpenAI({
-      apiKey: OPENAI_API_KEY,
-    });
+    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-    // Get label suggestion from OpenAI
-    const prompt = `Based on this task title: "${title}" and description: "${description}", suggest ONE of these labels: work, personal, priority, shopping, home. Reply with just the label word and nothing else.`;
+    // AI label generation prompt
+    const prompt = `Task title: "${title}"
+Description: "${description ?? ""}"
+
+Choose ONE label only from this list:
+- work
+- personal
+- priority
+- shopping
+- home
+
+Return ONLY the label word.`;
 
     const completion = await openai.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
       model: "gpt-4o-mini",
-      temperature: 0.3,
-      max_tokens: 16,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      max_tokens: 5,
     });
 
-    const suggestedLabel = completion.choices[0].message.content
+    const raw = completion.choices[0].message.content
       ?.toLowerCase()
       .trim();
 
-    console.log(`✨ AI Suggested Label: ${suggestedLabel}`);
+    const VALID = ["work", "personal", "priority", "shopping", "home"];
+    const label = VALID.includes(raw) ? raw : null;
 
-    // Validate the label
-    const validLabels = ["work", "personal", "priority", "shopping", "home"];
-    const label = validLabels.includes(suggestedLabel) ? suggestedLabel : null;
-
-    // Update the task with the suggested label
-    const { data: updatedTask, error: updateError } = await supabaseClient
+    // Update task with label
+    const { data: updated, error: updateError } = await supabase
       .from("tasks")
       .update({ label })
-      .eq("task_id", data.task_id)
+      .eq("task_id", task.task_id)
       .select()
       .single();
 
     if (updateError) throw updateError;
 
-    return new Response(JSON.stringify(updatedTask), {
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
+    return new Response(JSON.stringify(updated), {
+      headers: { "Content-Type": "application/json", ...corsHeaders },
     });
-  } catch (error) {
-    console.error("Error in create-task-with-ai:", error.message);
-    return new Response(JSON.stringify({ error: error.message }), {
+  } catch (err) {
+    console.error("❌ Error in create-task-with-ai:", err.message);
+    return new Response(JSON.stringify({ error: err.message }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-});
+}
+
+Deno.serve(createTaskWithAI);

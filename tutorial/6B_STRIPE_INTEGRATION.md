@@ -43,8 +43,7 @@ We'll need this to make the **Manage Subscription** button work for users.
 # Remember to set your $PROJECT_ID or replace it here.
 
 # This is how you'd normally create the function.
-supabase functions new create-stripe-session
-
+supabase functions new 
 # But if you already have the function from this commit, then just deploy it.
 supabase functions deploy create-stripe-session --project-ref $PROJECT_ID
 ```
@@ -95,23 +94,26 @@ supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_xxx
 The frontend integration uses the `useSubscription` hook to manage subscriptions (via our `create-stripe-session` edge function):
 
 ```tsx
-const manageSubscription = async (accessToken: string) => {
+export const manageSubscription = async (accessToken: string) => {
   const response = await fetch(
     `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-stripe-session`,
     {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
       },
+      // ❗ DO NOT SEND A BODY — this breaks Stripe
     }
   );
 
   const { url, error } = await response.json();
   if (error) throw new Error(error);
-  
+
+  // Redirect user
   window.location.href = url;
 };
+
 ```
 
 This redirects users to either:
