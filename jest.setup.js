@@ -1,5 +1,12 @@
-const dotenv = require('dotenv');
-const path = require('path');
-
-// Load environment variables from .env.test
-dotenv.config({ path: path.resolve(process.cwd(), ".env.test.local") });
+module.exports = {
+    preset: "ts-jest",
+    testEnvironment: "node",
+    setupFiles: ["<rootDir>/jest.setup.js"],
+    roots: ["<rootDir>/tests"],
+    transform: {
+      "^.+\\.(ts|tsx)$": "ts-jest",
+    },
+    transformIgnorePatterns: [],
+    moduleFileExtensions: ["ts", "js", "json"],
+  };
+  
