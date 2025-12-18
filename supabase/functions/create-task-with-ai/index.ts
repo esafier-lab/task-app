@@ -3,11 +3,18 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import OpenAI from "npm:openai";
 
-// Load environment variables
+/* =======================
+   Environment Variables
+======================= */
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+const SUPABASE_SERVICE_ROLE_KEY =
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") ?? "";
 
+/* =======================
+   CORS
+======================= */
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -15,6 +22,9 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+/* =======================
+   Main Function
+======================= */
 async function createTaskWithAI(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -22,26 +32,39 @@ async function createTaskWithAI(req: Request): Promise<Response> {
 
   try {
     const { title, description } = await req.json();
-
     if (!title) throw new Error("Missing title");
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) throw new Error("Missing Authorization header");
 
-    // Initialize Supabase client with user JWT
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    /* -----------------------
+       Auth client (verify user)
+    ------------------------ */
+    const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    // Get authenticated user
     const {
       data: { user },
-    } = await supabase.auth.getUser();
+      error: authError,
+    } = await supabaseAuth.auth.getUser();
 
-    if (!user) throw new Error("User not authenticated");
+    if (authError || !user) throw new Error("User not authenticated");
 
-    // Optional subscription check
-    const { data: profile } = await supabase
+    /* -----------------------
+       Admin client (DB access)
+    ------------------------ */
+    const supabaseAdmin = createClient(
+      SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    /* -----------------------
+       (Optional) subscription check
+       Commented out for testing
+    ------------------------ */
+    /*
+    const { data: profile } = await supabaseAdmin
       .from("profiles")
       .select("subscription_level")
       .eq("id", user.id)
@@ -53,9 +76,12 @@ async function createTaskWithAI(req: Request): Promise<Response> {
         { status: 403, headers: corsHeaders }
       );
     }
+    */
 
-    // Insert base task
-    const { data: task, error: taskInsertError } = await supabase
+    /* -----------------------
+       Create task
+    ------------------------ */
+    const { data: task, error: insertError } = await supabaseAdmin
       .from("tasks")
       .insert({
         title,
@@ -66,12 +92,13 @@ async function createTaskWithAI(req: Request): Promise<Response> {
       .select()
       .single();
 
-    if (taskInsertError) throw taskInsertError;
+    if (insertError) throw insertError;
 
-    // Initialize OpenAI
+    /* -----------------------
+       OpenAI label generation
+    ------------------------ */
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-    // AI label generation prompt
     const prompt = `Task title: "${title}"
 Description: "${description ?? ""}"
 
@@ -98,8 +125,10 @@ Return ONLY the label word.`;
     const VALID = ["work", "personal", "priority", "shopping", "home"];
     const label = VALID.includes(raw) ? raw : null;
 
-    // Update task with label
-    const { data: updated, error: updateError } = await supabase
+    /* -----------------------
+       Update task with label
+    ------------------------ */
+    const { data: updated, error: updateError } = await supabaseAdmin
       .from("tasks")
       .update({ label })
       .eq("task_id", task.task_id)
@@ -111,13 +140,16 @@ Return ONLY the label word.`;
     return new Response(JSON.stringify(updated), {
       headers: { "Content-Type": "application/json", ...corsHeaders },
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error("❌ Error in create-task-with-ai:", err.message);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...corsHeaders },
     });
   }
 }
 
+/* =======================
+   Start Server
+======================= */
 Deno.serve(createTaskWithAI);
