@@ -231,6 +231,24 @@ function TaskForm() {
           </Select>
         </div>
         <div className="grid w-full items-center gap-1.5">
+          <Label>Priority</Label>
+          <Select
+            value={task.priority?.toString() || "2"}
+            onValueChange={(value) =>
+              updateTask({ priority: parseInt(value, 10) })
+            }
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select priority" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">Low</SelectItem>
+              <SelectItem value="2">Medium</SelectItem>
+              <SelectItem value="3">High</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid w-full items-center gap-1.5">
           <Label>Due Date</Label>
           <Popover>
             <PopoverTrigger asChild>

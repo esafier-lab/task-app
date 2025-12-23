@@ -95,42 +95,49 @@ async function createTaskWithAI(req: Request): Promise<Response> {
     if (insertError) throw insertError;
 
     /* -----------------------
-       OpenAI label generation
+       OpenAI label and priority generation
     ------------------------ */
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
     const prompt = `Task title: "${title}"
 Description: "${description ?? ""}"
 
-Choose ONE label only from this list:
-- work
-- personal
-- priority
-- shopping
-- home
+Analyze this task and provide:
+1. A label from this list: work, personal, priority, shopping, home
+2. A priority level: 1 (low), 2 (medium), or 3 (high)
 
-Return ONLY the label word.`;
+Consider urgency, importance, deadlines, and keywords like "urgent", "asap", "important", "deadline", "critical" for priority.
+
+Return your response in this exact format:
+LABEL: [label word]
+PRIORITY: [1, 2, or 3]`;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
-      max_tokens: 5,
+      temperature: 0.3,
+      max_tokens: 20,
     });
 
-    const raw = completion.choices[0].message.content
-      ?.toLowerCase()
-      .trim();
+    const response = completion.choices[0].message.content || "";
+    
+    // Parse label
+    const labelMatch = response.match(/LABEL:\s*(\w+)/i);
+    const rawLabel = labelMatch?.[1]?.toLowerCase().trim();
+    const VALID_LABELS = ["work", "personal", "priority", "shopping", "home"];
+    const label = rawLabel && VALID_LABELS.includes(rawLabel) ? rawLabel : null;
 
-    const VALID = ["work", "personal", "priority", "shopping", "home"];
-    const label = VALID.includes(raw) ? raw : null;
+    // Parse priority
+    const priorityMatch = response.match(/PRIORITY:\s*([1-3])/i);
+    const priorityValue = priorityMatch?.[1] ? parseInt(priorityMatch[1], 10) : 2;
+    const priority = priorityValue >= 1 && priorityValue <= 3 ? priorityValue : 2;
 
     /* -----------------------
-       Update task with label
+       Update task with label and priority
     ------------------------ */
     const { data: updated, error: updateError } = await supabaseAdmin
       .from("tasks")
-      .update({ label })
+      .update({ label, priority })
       .eq("task_id", task.task_id)
       .select()
       .single();
